@@ -81,3 +81,75 @@ append-only between resets, so ~99.8% of input tokens hit the prefix cache.
    dimensional constant cancels in the homogeneous inequality); the
    corrected theorem was proved twice independently within ~5 hours each,
    while the original resisted multi-day attempts.
+
+## Reproducing the experiment
+
+The repo is self-contained except for the benchmark itself and a DeepSeek
+API key. Full setup:
+
+```bash
+git clone git@github.com:SkidanovAlex/putnambench-deepseek.git
+cd putnambench-deepseek
+
+# 1. the benchmark (statements + the shared Lean/Mathlib project)
+git clone https://github.com/trishullab/PutnamBench putnambench
+cp -r harness putnambench/harness
+
+# 2. build Mathlib once (uses the toolchain pinned by the project)
+( cd putnambench/lean4 && lake exe cache get && lake build )
+
+# 3. model config: create .nearai.deepseek.pro (or any name, see --model-cfg)
+cat > .nearai.deepseek.pro <<CFG
+{
+ "host": "https://api.deepseek.com/chat/completions",
+ "model": "deepseek-v4-pro",
+ "apikey": "sk-...",
+ "context_window": 1000000,
+ "merge_reasoning": false
+}
+CFG
+
+# 4. generate the manifest + inlined-solution statements, and the work queue
+python3 putnambench/harness/pb.py prepare
+python3 putnambench/harness/pb.py queue-init
+
+# 5a. solve one specific problem
+python3 run_putnam_solver.py --problem putnam_1986_a1
+
+# 5b. ...or run N parallel workers until the queue drains
+for i in $(seq 8); do
+  nohup python3 run_putnam_solver.py --loop 0 > worker$i.log 2>&1 &
+done
+```
+
+Each run stages the problem into its own directory, lets the agent work
+(bash + the two finishing tools), and re-runs the verifier itself before
+recording the outcome; trajectories land in `db.sql` (override with
+`TRAJ_DB`). `--model-cfg` picks the model config per worker; `--timeout`
+caps wall-clock per problem (default 3 days).
+
+### Worked example
+
+As a smoke test of exactly the published files, `putnam_1986_a1` (find
+max of a polynomial-constrained expression) was re-solved from this repo
+layout with DeepSeek V4 flash:
+
+```
+python3 run_putnam_solver.py --problem putnam_1986_a1 \
+    --model-cfg .nearai.deepseek.flash --runs-dir putnambench/runs-repro
+```
+
+Result, run exactly as above from a fresh clone of this repo:
+
+```
+finish_reason  : stop
+num_steps      : 10
+elapsed        : 118s
+passed         : True
+finishing tool : completed
+```
+
+The agent read the staged file, wrote and elaborated the proof, called
+`completed()` (which runs verify.sh: no sorry/axiom escapes, frozen
+statement intact, clean `#print axioms`), and the harness independently
+re-ran the verifier before recording the outcome.

@@ -1,2 +1,6 @@
 __pycache__/
 *.pyc
+.nearai.*
+db.sql*
+putnambench
+harness/__pycache__/
